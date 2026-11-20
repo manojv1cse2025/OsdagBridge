@@ -141,11 +141,19 @@ from osdagbridge.core.utils.common import (
     KEY_UTIL_SHEAR
 )
 
-from osdagbridge.core.reports.report_utils import _tex, _render_value, get_girder_entries
+import os
+from osdagbridge.core.reports.report_utils import (
+    _tex,
+    _render_value,
+    get_girder_entries,
+    _fig_embed,
+    generate_ur_summary_chart,
+)
+from osdagbridge.core.reports.styles import TABLE_STYLE
 
 if TYPE_CHECKING:
     pass
-def ch5_design_checks(checks_data, bridge) -> str:
+def ch5_design_checks(checks_data, bridge, chart_dir=None) -> str:
     """Chapter 5 — Design Checks.
 
     Parameters
@@ -1064,6 +1072,75 @@ Fatigue Shear Resistance, $Q_r$ & IRC 22 Table 8 ($\phi d$, $N_{sc}$) & """
         _ed_shear_row,
     ]
     t522_content = "\n".join(_t522)
+
+
+# --- Section 5.5 Utilization Ratio Summary Chart ---
+    def _max_dcr(check_ids):
+        vals = []
+        for g, gd in _pg_522.items():
+            if str(g).startswith("EB"):
+                continue
+            for chk in (gd.get("checks") or []):
+                if chk.get("check_id") in check_ids and chk.get("dcr") is not None:
+                    vals.append(float(chk["dcr"]))
+            for _lc, _ld in (gd.get("per_lc") or {}).items():
+                if str(_lc).lower().startswith("envelope"):
+                    continue
+                for chk in (_ld.get("checks") or []):
+                    if chk.get("id") in check_ids and chk.get("dcr") is not None:
+                        vals.append(float(chk["dcr"]))
+        return max(vals) if vals else None
+
+    girder_ur = _max_dcr({1, 2, 5, 8, 9, 11, 13, 14})
+
+    deck_urs = []
+    if _dk_has:
+        for d_k, c_k in [
+            (KEY_DD_M_ULS_SAG, KEY_DD_MU_BOT),
+            (KEY_DD_M_ULS_HOG, KEY_DD_MU_TOP),
+            (KEY_DD_PUNCH_VED, KEY_DD_VRD_C_MPA),
+            (KEY_DD_SHEAR_VED, KEY_DD_SHEAR_VRDC),
+        ]:
+            c_v = _dkv(c_k)
+            if c_v > 0:
+                deck_urs.append(_dkv(d_k) / c_v)
+        if _dk_oh and _dkv(KEY_DD_MU_OH) > 0:
+            deck_urs.append(_dkv(KEY_DD_M_ULS_OH) / _dkv(KEY_DD_MU_OH))
+        if _wk_lim > 0:
+            deck_urs.append(_dk_gov_wk / _wk_lim)
+    deck_ur = max(deck_urs) if deck_urs else None
+
+    cb_urs = []
+    for pair in _cb_pairs_522:
+        for member in ("diagonal", "chord"):
+            for ft in ("compression", "tension"):
+                eff = bridge.get_cb_efficiency(pair, member, ft)
+                try:
+                    cb_urs.append(float(eff))
+                except (TypeError, ValueError):
+                    pass
+    cb_ur = max(cb_urs) if cb_urs else None
+    ed_ur = cb_ur if _ed_is_cb else None
+
+    ur_chart_tex = ""
+    if chart_dir:
+        ur_chart_path = generate_ur_summary_chart(
+            [
+                ("Steel Plate\nGirders", girder_ur),
+                ("Concrete\nDeck Slab", deck_ur),
+                ("Cross\nBracing", cb_ur),
+                ("End\nDiaphragms", ed_ur),
+            ],
+            os.path.join(chart_dir, "sec55_ur_summary.png"),
+        )
+        if ur_chart_path:
+            ur_chart_tex = "\n" + _fig_embed(
+                ur_chart_path,
+                r"Governing Utilization Ratios ($UR = \text{Demand} / \text{Capacity}$) Across Primary Structural Elements",
+                width=r"0.90\textwidth",
+            )
+
+
 
     return r"""
 \chapter{Design Checks}
